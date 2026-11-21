@@ -1,6 +1,7 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -79,6 +80,35 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict:
     return {"token": create_access_token(str(user.id), user.role), "user": public_user(user)}
 
 
+def get_least_loaded_ca_id(db: Session) -> str | None:
+    """Find the active Tax Officer with the fewest assigned clients.
+    If multiple CAs are tied, prefers the demo CA for consistent local dev/testing.
+    """
+    cas = db.query(User).filter(User.role == "ca", User.status == "active").all()
+    if not cas:
+        cas = db.query(User).filter(User.role == "ca").all()
+    if not cas:
+        return None
+    if len(cas) == 1:
+        return cas[0].id
+
+    # Count clients per CA
+    counts = dict(
+        db.query(Client.ca_id, func.count(Client.id))
+        .filter(Client.ca_id.isnot(None))
+        .group_by(Client.ca_id)
+        .all()
+    )
+
+    def ca_rank(ca: User):
+        c_count = counts.get(ca.id, 0)
+        is_demo = 0 if ca.email in ("taxofficer.demo@reconai.local", "ca.demo@reconai.local") else 1
+        return (c_count, is_demo, ca.created_at)
+
+    cas.sort(key=ca_rank)
+    return cas[0].id
+
+
 @router.post("/register", status_code=201)
 @router.post("/register-otp", status_code=201)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
@@ -101,9 +131,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
             pending_client.name = payload.businessName or payload.name
             pending_client.city = payload.city
             if not pending_client.ca_id:
-                def_ca = db.query(User).filter(User.email.in_(["taxofficer.demo@reconai.local", "ca.demo@reconai.local"]), User.role == "ca").first() or db.query(User).filter(User.role == "ca").first()
-                if def_ca:
-                    pending_client.ca_id = def_ca.id
+                pending_client.ca_id = get_least_loaded_ca_id(db)
         create_email_otp(db, existing, "registration", resend=True)
         db.commit()
         return {"message": f"Registration pending verification. {otp_delivery_note(email)}", "email": email}
@@ -129,8 +157,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     db.flush()
 
     if payload.role == "client":
-        default_ca = db.query(User).filter(User.email.in_(["taxofficer.demo@reconai.local", "ca.demo@reconai.local"]), User.role == "ca").first() or db.query(User).filter(User.role == "ca").first()
-        default_ca_id = default_ca.id if default_ca else None
+        default_ca_id = get_least_loaded_ca_id(db)
         pending_gstin = f"PENDING_{uuid.uuid4().hex[:8].upper()}"
         client_id = f"cl_{uuid.uuid4().hex[:16]}"
         db.add(

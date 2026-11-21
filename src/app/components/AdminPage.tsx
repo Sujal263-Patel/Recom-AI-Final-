@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   Lock, RefreshCw, Plus, Users, Activity, Bot, MessageSquare, Database, Building2,
   Search, ChevronDown, ChevronUp, MoreHorizontal, ArrowRight, Eye, ShieldAlert,
-  FileText, CheckCircle2, Clock, Mail, Sparkles, AlertCircle
+  FileText, CheckCircle2, Clock, Mail, Sparkles, AlertCircle, ArrowLeftRight, X, Loader2, Check
 } from "lucide-react";
 import { apiRequest } from "../lib/api";
 import { formatIST } from "../lib/datetime";
@@ -25,10 +25,11 @@ function Badge({ label, variant }: { label: string; variant: "success" | "warnin
 interface AdminPageProps {
   onSelectClient?: (id: string) => void;
   onNavigate?: (page: any) => void;
+  onInspectClient?: (client: { id: string; name: string; gstin: string }) => void;
 }
 
-export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps) {
-  const [adminTab, setAdminTab] = useState<"logs" | "ai-chats" | "communications" | "data" | "officers">("logs");
+export default function AdminPage({ onSelectClient, onNavigate, onInspectClient }: AdminPageProps) {
+  const [adminTab, setAdminTab] = useState<"users" | "logs" | "officers" | "data" | "ai-chats" | "communications">("users");
   const [users, setUsers] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [aiChats, setAiChats] = useState<any[]>([]);
@@ -46,16 +47,47 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
   const [msgSearch, setMsgSearch] = useState("");
   const [dataSearch, setDataSearch] = useState("");
 
+  // User Access Directory State
+  const [userRoleFilter, setUserRoleFilter] = useState<"ALL" | "admin" | "ca" | "client">("ALL");
+  const [userStatusFilter, setUserStatusFilter] = useState<"ALL" | "active" | "inactive" | "suspended">("ALL");
+  const [userSearchQuery, setUserSearchQuery] = useState("");
+  const [selectedUserForManage, setSelectedUserForManage] = useState<any | null>(null);
+  const [statusToSet, setStatusToSet] = useState<string>("active");
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  // Add Tax Officer Modal State
+  const [showAddOfficerModal, setShowAddOfficerModal] = useState(false);
+  const [addOfficerForm, setAddOfficerForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+    phone: "",
+    firmName: "",
+    icaiNumber: "",
+    city: "",
+    specialization: "GST Audit & Litigation",
+  });
+  const [savingOfficer, setSavingOfficer] = useState(false);
+  const [officerError, setOfficerError] = useState("");
+
+  // Reassign Client Modal State
+  const [reassignClientTarget, setReassignClientTarget] = useState<any | null>(null);
+  const [selectedNewCaId, setSelectedNewCaId] = useState("");
+  const [reassignReason, setReassignReason] = useState("");
+  const [reassigning, setReassigning] = useState(false);
+  const [availableOfficers, setAvailableOfficers] = useState<any[]>([]);
+
   const loadAdminData = async () => {
     setLoading(true);
     try {
-      const [uRes, logRes, aiRes, msgRes, dataRes, sysRes] = await Promise.allSettled([
+      const [uRes, logRes, aiRes, msgRes, dataRes, sysRes, wlRes] = await Promise.allSettled([
         apiRequest<{ users: any[] }>("/api/admin/users", { auth: true }),
         apiRequest<{ logs: any[] }>("/api/admin/audit-logs", { auth: true }),
         apiRequest<{ chats: any[] }>("/api/admin/ai-chats", { auth: true }),
         apiRequest<{ messages: any[] }>("/api/admin/messages", { auth: true }),
         apiRequest<{ clients: any[] }>("/api/admin/data-overview", { auth: true }),
         apiRequest<{ system: any }>("/api/admin/system", { auth: true }),
+        apiRequest<{ taxOfficers: any[] }>("/api/admin/tax-officers/workload", { auth: true }),
       ]);
 
       if (uRes.status === "fulfilled" && uRes.value?.users) {
@@ -197,6 +229,9 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
       if (sysRes.status === "fulfilled" && sysRes.value?.system) {
         setSystemStats(sysRes.value.system);
       }
+      if (wlRes.status === "fulfilled" && wlRes.value?.taxOfficers) {
+        setAvailableOfficers(wlRes.value.taxOfficers);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -207,6 +242,98 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
   useEffect(() => {
     loadAdminData();
   }, []);
+
+  const handleCreateTaxOfficer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addOfficerForm.name || !addOfficerForm.email || !addOfficerForm.password) {
+      setOfficerError("Name, email and password are required.");
+      return;
+    }
+    setSavingOfficer(true);
+    setOfficerError("");
+    try {
+      const res = await apiRequest<{ message: string; taxOfficer: any }>("/api/admin/tax-officers", {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify(addOfficerForm),
+      });
+      setNotice(res.message || "Tax Officer created successfully.");
+      setShowAddOfficerModal(false);
+      setAddOfficerForm({
+        name: "",
+        email: "",
+        password: "",
+        phone: "",
+        firmName: "",
+        icaiNumber: "",
+        city: "",
+        specialization: "GST Audit & Litigation",
+      });
+      loadAdminData();
+    } catch (err) {
+      setOfficerError(err instanceof Error ? err.message : "Failed to create Tax Officer.");
+    } finally {
+      setSavingOfficer(false);
+    }
+  };
+
+  const handleReassignClient = async () => {
+    if (!reassignClientTarget?.id || !selectedNewCaId) return;
+    setReassigning(true);
+    try {
+      const res = await apiRequest<{ message: string; client: any }>(`/api/admin/clients/${reassignClientTarget.id}/reassign`, {
+        method: "PUT",
+        auth: true,
+        body: JSON.stringify({
+          newCaId: selectedNewCaId,
+          reason: reassignReason || "Portfolio rebalancing by System Admin",
+        }),
+      });
+      setNotice(res.message || "Client reassigned successfully.");
+      setReassignClientTarget(null);
+      loadAdminData();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Reassignment failed.");
+    } finally {
+      setReassigning(false);
+    }
+  };
+
+  const handleUpdateUserStatus = async () => {
+    if (!selectedUserForManage) return;
+    setUpdatingStatus(true);
+    try {
+      const res = await apiRequest<{ message: string; status: string }>(
+        `/api/admin/users/${selectedUserForManage.id}/status`,
+        {
+          method: "PUT",
+          body: { status: statusToSet },
+          auth: true,
+        }
+      );
+      setNotice(res.message || `User status updated to ${statusToSet}`);
+      setUsers(prev =>
+        prev.map(u => (u.id === selectedUserForManage.id ? { ...u, status: statusToSet } : u))
+      );
+      setSelectedUserForManage(null);
+    } catch (err: any) {
+      setNotice(`Failed to update status: ${err.message || "Unknown error"}`);
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
+
+  const filteredUsers = users.filter(u => {
+    if (userRoleFilter !== "ALL" && u.role !== userRoleFilter) return false;
+    if (userStatusFilter !== "ALL" && (u.status || "active").toLowerCase() !== userStatusFilter) return false;
+    if (userSearchQuery.trim()) {
+      const q = userSearchQuery.toLowerCase();
+      const name = (u.name || "").toLowerCase();
+      const email = (u.email || "").toLowerCase();
+      return name.includes(q) || email.includes(q);
+    }
+    return true;
+  });
 
   const filteredLogs = auditLogs.filter(log => {
     const act = (log.action || log.action_type || "").toLowerCase();
@@ -293,10 +420,10 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
           </button>
           <button
             type="button"
-            onClick={() => setNotice("Invite user flow initialized.")}
+            onClick={() => setShowAddOfficerModal(true)}
             className="flex items-center gap-1.5 text-xs bg-primary text-primary-foreground px-3.5 py-2 rounded-lg hover:bg-primary/90 font-medium transition-colors shadow-sm"
           >
-            <Plus size={12} /> Invite User
+            <Plus size={12} /> Add Tax Officer
           </button>
         </div>
       </div>
@@ -339,11 +466,12 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
       {/* Navigation Tabs */}
       <div className="flex bg-muted/60 p-1 rounded-xl border border-border flex-wrap gap-1">
         {[
+          { id: "users", label: "User Access Directory", icon: Users, count: users.length },
           { id: "logs", label: "System & Audit Logs", icon: Activity, count: auditLogs.length },
+          { id: "officers", label: "Tax Officers Directory", icon: Building2 },
+          { id: "data", label: "Global Data Explorer", icon: Database, count: dataOverview.length },
           { id: "ai-chats", label: "Tax Officer AI Chats", icon: Bot, count: aiChats.length },
           { id: "communications", label: "Officer ↔ Client Messages", icon: MessageSquare, count: messages.length },
-          { id: "data", label: "Global Data Explorer", icon: Database, count: dataOverview.length },
-          { id: "officers", label: "Tax Officers Directory", icon: Building2 },
         ].map(t => {
           const Icon = t.icon;
           const active = adminTab === t.id;
@@ -370,61 +498,177 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
         })}
       </div>
 
-      {/* TAB 1: AUDIT LOGS & USER DIRECTORY */}
-      {adminTab === "logs" && (
-        <div className="space-y-6">
-          {/* User Management Section */}
-          <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-            <div className="px-5 py-3.5 border-b border-border flex items-center justify-between bg-muted/20">
+      {/* TAB: USER ACCESS DIRECTORY */}
+      {adminTab === "users" && (
+        <div className="space-y-4">
+          <div className="bg-card border border-border rounded-xl p-4 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-bold flex items-center gap-2">
-                  <Users size={16} className="text-primary" /> User Access Directory
+                <div className="text-base font-bold flex items-center gap-2 text-foreground">
+                  <Users size={18} className="text-primary" /> User Access Directory
                 </div>
-                <div className="text-[11px] text-muted-foreground">Overview of users across Admin, Tax Officer, and Client roles</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  Oversee user accounts across Admin, Tax Officer, and Client roles. Review verification standing and control access status.
+                </div>
+              </div>
+
+              {/* Role pill counters */}
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="px-2.5 py-1 rounded-lg bg-muted border border-border text-foreground font-mono">
+                  All: <strong>{users.length}</strong>
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 font-mono">
+                  Admins: <strong>{users.filter(u => u.role === "admin").length}</strong>
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 font-mono">
+                  Officers: <strong>{users.filter(u => u.role === "ca").length}</strong>
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 font-mono">
+                  Clients: <strong>{users.filter(u => u.role === "client").length}</strong>
+                </span>
               </div>
             </div>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-border bg-muted/40">
-                  {["User / Name", "Email Address", "System Role", "Status", "Registered (IST)", "Actions"].map(h => (
-                    <th key={h} className="text-left px-4 py-3 font-medium text-muted-foreground">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {users.map((u, idx) => (
-                  <tr key={u.id || u.email || idx} className="hover:bg-muted/40 transition-colors">
-                    <td className="px-4 py-3 font-medium">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-full bg-primary/15 text-primary flex items-center justify-center text-[10px] font-bold">
-                          {(u.name || "U")[0]}
-                        </div>
-                        <span>{u.name || u.email}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground font-mono">{u.email}</td>
-                    <td className="px-4 py-3">
-                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${u.role === "admin" ? "bg-purple-500/15 text-purple-600 dark:text-purple-400" :
-                        u.role === "ca" ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400" :
-                          "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                        }`}>
-                        {u.role === "ca" ? "Tax Officer" : u.role === "admin" ? "System Admin" : "Client Owner"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge label={u.status || "Active"} variant={u.status === "Active" || u.status === "active" ? "success" : "neutral"} />
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{formatIST(u.createdAt)}</td>
-                    <td className="px-4 py-3">
-                      <button type="button" onClick={() => setNotice(`User details opened for ${u.email}`)} className="p-1 rounded hover:bg-muted text-muted-foreground">
-                        <MoreHorizontal size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+            {/* Filter and Search Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-2 border-t border-border">
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={userSearchQuery}
+                  onChange={e => setUserSearchQuery(e.target.value)}
+                  placeholder="Search by user name or email..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground shrink-0 font-medium">Role:</span>
+                <select
+                  value={userRoleFilter}
+                  onChange={e => setUserRoleFilter(e.target.value as any)}
+                  className="w-full px-2.5 py-1.5 bg-muted border border-border rounded-lg text-foreground font-medium focus:outline-none"
+                >
+                  <option value="ALL">All System Roles</option>
+                  <option value="admin">System Administrator</option>
+                  <option value="ca">Tax Officer / CA</option>
+                  <option value="client">Client / Taxpayer</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground shrink-0 font-medium">Status:</span>
+                <select
+                  value={userStatusFilter}
+                  onChange={e => setUserStatusFilter(e.target.value as any)}
+                  className="w-full px-2.5 py-1.5 bg-muted border border-border rounded-lg text-foreground font-medium focus:outline-none"
+                >
+                  <option value="ALL">All Account Statuses</option>
+                  <option value="active">Active (Access Granted)</option>
+                  <option value="inactive">Inactive</option>
+                  <option value="suspended">Suspended (Access Blocked)</option>
+                </select>
+              </div>
+            </div>
           </div>
+
+          {/* User Table */}
+          <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40">
+                    <th className="text-left px-4 py-3 font-semibold text-muted-foreground">User / Name</th>
+                    <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Email Address</th>
+                    <th className="text-left px-4 py-3 font-semibold text-muted-foreground">System Role</th>
+                    <th className="text-center px-4 py-3 font-semibold text-muted-foreground">Email Verification</th>
+                    <th className="text-center px-4 py-3 font-semibold text-muted-foreground">Account Status</th>
+                    <th className="text-left px-4 py-3 font-semibold text-muted-foreground">Registered (IST)</th>
+                    <th className="text-right px-4 py-3 font-semibold text-muted-foreground">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filteredUsers.map((u, idx) => {
+                    const isVerified = u.emailVerified ?? true;
+                    const st = (u.status || "active").toLowerCase();
+                    const statusVariant = st === "active" ? "success" : st === "suspended" ? "danger" : "neutral";
+
+                    return (
+                      <tr key={u.id || u.email || idx} className="hover:bg-muted/30 transition-colors">
+                        <td className="px-4 py-3 font-medium">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0">
+                              {(u.name || "U")[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="font-bold text-foreground">{u.name || "Unnamed User"}</div>
+                              {u.firmName && <div className="text-[10px] text-muted-foreground">{u.firmName}</div>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground font-mono">{u.email}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                              u.role === "admin"
+                                ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+                                : u.role === "ca"
+                                ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
+                                : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                            }`}
+                          >
+                            {u.role === "ca" ? "Tax Officer" : u.role === "admin" ? "System Admin" : "Client Owner"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {isVerified ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                              <CheckCircle2 size={11} /> Verified
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                              <Clock size={11} /> Pending
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <Badge label={st.charAt(0).toUpperCase() + st.slice(1)} variant={statusVariant as any} />
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatIST(u.createdAt)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedUserForManage(u);
+                              setStatusToSet(st);
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary bg-primary/10 hover:bg-primary/20 px-2.5 py-1 rounded-md transition-colors"
+                          >
+                            <span>Manage</span>
+                            <ArrowRight size={11} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {filteredUsers.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-xs text-muted-foreground">
+                        No users found matching your search and filter criteria.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: SYSTEM & AUDIT LOGS */}
+      {adminTab === "logs" && (
+        <div className="space-y-6">
 
           {/* System Activity Logs with View More / View Less Toggle */}
           <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm space-y-0">
@@ -811,8 +1055,25 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
                       {c.city && <div className="text-[10px] text-muted-foreground">{c.city}</div>}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-foreground">{c.officerName || "Unassigned"}</div>
-                      <div className="text-[10px] font-mono text-muted-foreground">{c.officerFirm || c.officerEmail}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="font-semibold text-foreground">{c.officerName || "Unassigned"}</div>
+                          <div className="text-[10px] font-mono text-muted-foreground">{c.officerFirm || c.officerEmail}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReassignClientTarget(c);
+                            setSelectedNewCaId("");
+                            setReassignReason("");
+                          }}
+                          title="Reassign to another Tax Officer"
+                          className="px-2 py-1 text-[10px] font-semibold text-primary hover:bg-primary/10 rounded border border-primary/20 flex items-center gap-1 transition-colors"
+                        >
+                          <ArrowLeftRight size={11} />
+                          <span>Reassign</span>
+                        </button>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -840,8 +1101,12 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
                       <button
                         type="button"
                         onClick={() => {
-                          if (onSelectClient) onSelectClient(c.id);
-                          if (onNavigate) onNavigate("reconciliation");
+                          if (onInspectClient) {
+                            onInspectClient({ id: String(c.id), name: c.name, gstin: c.gstin });
+                          } else {
+                            if (onSelectClient) onSelectClient(c.id);
+                            if (onNavigate) onNavigate("reconciliation");
+                          }
                         }}
                         className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline bg-primary/10 hover:bg-primary/20 px-2.5 py-1 rounded-md transition-colors"
                       >
@@ -868,7 +1133,386 @@ export default function AdminPage({ onSelectClient, onNavigate }: AdminPageProps
       {/* TAB 5: TAX OFFICERS DIRECTORY */}
       {adminTab === "officers" && (
         <div className="bg-card border border-border rounded-xl p-5 shadow-sm">
-          <CADirectoryAdminSection />
+          <CADirectoryAdminSection
+            onOpenAddModal={() => setShowAddOfficerModal(true)}
+            onClientReassigned={loadAdminData}
+            onInspectClient={onInspectClient}
+          />
+        </div>
+      )}
+
+      {/* ── Add Tax Officer Modal ────────────────────────────── */}
+      {showAddOfficerModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border text-foreground rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Building2 size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">Add New Tax Officer</h3>
+                  <p className="text-xs text-muted-foreground">Provision an accredited Tax Officer / CA onto the platform</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddOfficerModal(false);
+                  setOfficerError("");
+                }}
+                className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {officerError && (
+              <div className="text-xs text-rose-500 bg-rose-500/10 border border-rose-500/20 rounded-lg p-3 font-medium flex items-center gap-2">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>{officerError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleCreateTaxOfficer} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">Full Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. CA Anita Sharma"
+                    value={addOfficerForm.name}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">Email Address (Login ID) *</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="e.g. anita.sharma@reconai.local"
+                    value={addOfficerForm.email}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, email: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono text-[11px]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">Initial Password *</label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Min 6 characters"
+                    value={addOfficerForm.password}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, password: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">ICAI Membership No.</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. ICAI-452189"
+                    value={addOfficerForm.icaiNumber}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, icaiNumber: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono uppercase text-[11px]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">Firm Name / Division</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Sharma & Associates"
+                    value={addOfficerForm.firmName}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, firmName: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">City / Office Location</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Mumbai, Maharashtra"
+                    value={addOfficerForm.city}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, city: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">Contact Phone</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. +91 9876543210"
+                    value={addOfficerForm.phone}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, phone: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono text-[11px]"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1 text-foreground">Specialization</label>
+                  <select
+                    value={addOfficerForm.specialization}
+                    onChange={e => setAddOfficerForm({ ...addOfficerForm, specialization: e.target.value })}
+                    className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="GST Audit & Litigation">GST Audit & Litigation</option>
+                    <option value="Corporate Tax Advisory">Corporate Tax Advisory</option>
+                    <option value="Input Tax Credit Optimization">Input Tax Credit Optimization</option>
+                    <option value="E-Invoicing & Supply Chain">E-Invoicing & Supply Chain</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddOfficerModal(false);
+                    setOfficerError("");
+                  }}
+                  className="px-4 py-2 border border-border rounded-lg hover:bg-muted font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingOfficer}
+                  className="px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {savingOfficer ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                  <span>{savingOfficer ? "Creating Tax Officer..." : "Create Tax Officer"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reassign Client Modal ─────────────────────────────── */}
+      {reassignClientTarget && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border text-foreground rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <ArrowLeftRight size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">Reassign Business Entity</h3>
+                  <p className="text-xs text-muted-foreground">Transfer client portfolio to another Tax Officer</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReassignClientTarget(null)}
+                className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-3 bg-muted/40 border border-border rounded-xl text-xs space-y-1">
+              <div className="font-bold text-foreground text-sm">{reassignClientTarget.name}</div>
+              <div className="font-mono text-muted-foreground text-[11px]">GSTIN: {reassignClientTarget.gstin}</div>
+              <div className="text-muted-foreground mt-1">
+                Current Officer: <strong className="text-foreground">{reassignClientTarget.officerName || "Unassigned"}</strong>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="font-semibold block mb-1 text-foreground">Select New Tax Officer *</label>
+                <select
+                  value={selectedNewCaId}
+                  onChange={e => setSelectedNewCaId(e.target.value)}
+                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">Choose a Tax Officer...</option>
+                  {availableOfficers.map(ca => (
+                    <option key={ca.id} value={ca.id}>
+                      {ca.name} ({ca.clientCount} clients · {ca.workloadStatus || "Active"}) {ca.firmName ? `— ${ca.firmName}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="font-semibold block mb-1 text-foreground">Reason for Reassignment (Optional)</label>
+                <textarea
+                  rows={2}
+                  value={reassignReason}
+                  onChange={e => setReassignReason(e.target.value)}
+                  placeholder="e.g. Workload balancing, geographical division transfer..."
+                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-border text-xs">
+              <button
+                type="button"
+                onClick={() => setReassignClientTarget(null)}
+                className="px-4 py-2 border border-border rounded-lg hover:bg-muted font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReassignClient}
+                disabled={!selectedNewCaId || reassigning}
+                className="px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {reassigning ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                <span>{reassigning ? "Transferring..." : "Confirm Reassignment"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Manage User Account Status Modal ───────────────────── */}
+      {selectedUserForManage && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border text-foreground rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Users size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">Manage User Access</h3>
+                  <p className="text-xs text-muted-foreground">Review account profile and control platform access status</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedUserForManage(null)}
+                className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="bg-muted/30 border border-border rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-foreground text-sm">{selectedUserForManage.name}</span>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    selectedUserForManage.role === "admin"
+                      ? "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+                      : selectedUserForManage.role === "ca"
+                      ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
+                      : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                  }`}
+                >
+                  {selectedUserForManage.role === "ca"
+                    ? "Tax Officer"
+                    : selectedUserForManage.role === "admin"
+                    ? "System Admin"
+                    : "Client Owner"}
+                </span>
+              </div>
+              <div className="font-mono text-muted-foreground text-[11px]">{selectedUserForManage.email}</div>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-muted-foreground text-[11px]">Email Verification:</span>
+                {selectedUserForManage.emailVerified ?? true ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.2 rounded-full">
+                    <CheckCircle2 size={10} /> Verified
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.2 rounded-full">
+                    <Clock size={10} /> Pending Verification
+                  </span>
+                )}
+              </div>
+              {selectedUserForManage.firmName && (
+                <div className="text-muted-foreground text-[11px]">
+                  Firm: <span className="font-semibold text-foreground">{selectedUserForManage.firmName}</span>
+                </div>
+              )}
+              {selectedUserForManage.icaiNumber && (
+                <div className="text-muted-foreground text-[11px]">
+                  ICAI No: <span className="font-mono font-semibold text-foreground">{selectedUserForManage.icaiNumber}</span>
+                </div>
+              )}
+              {selectedUserForManage.gstin && (
+                <div className="text-muted-foreground text-[11px]">
+                  GSTIN: <span className="font-mono font-semibold text-foreground">{selectedUserForManage.gstin}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <label className="font-semibold block text-foreground">Account Access Status Control</label>
+              <div className="grid grid-cols-3 gap-2.5">
+                {[
+                  {
+                    id: "active",
+                    label: "Active",
+                    desc: "Full Login Access",
+                    color: "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+                  },
+                  {
+                    id: "inactive",
+                    label: "Inactive",
+                    desc: "Access Paused",
+                    color: "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                  },
+                  {
+                    id: "suspended",
+                    label: "Suspended",
+                    desc: "Account Blocked",
+                    color: "border-rose-500 bg-rose-500/10 text-rose-600 dark:text-rose-400",
+                  },
+                ].map(opt => {
+                  const isSelected = statusToSet === opt.id;
+                  return (
+                    <div
+                      key={opt.id}
+                      onClick={() => setStatusToSet(opt.id)}
+                      className={`cursor-pointer border rounded-xl p-3 text-center transition-all ${
+                        isSelected
+                          ? `${opt.color} ring-2 ring-primary/40 font-bold`
+                          : "border-border hover:bg-muted/40"
+                      }`}
+                    >
+                      <div className="text-xs font-bold">{opt.label}</div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">{opt.desc}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-border text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedUserForManage(null)}
+                className="px-4 py-2 border border-border rounded-lg hover:bg-muted font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleUpdateUserStatus}
+                disabled={updatingStatus}
+                className="px-5 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:bg-primary/90 transition-colors shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {updatingStatus ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                <span>{updatingStatus ? "Saving..." : "Save Status"}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

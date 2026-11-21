@@ -275,6 +275,7 @@ class Message(Base):
     client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), index=True)
     sender_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     text: Mapped[str] = mapped_column(Text)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     sender = relationship("User")
 
