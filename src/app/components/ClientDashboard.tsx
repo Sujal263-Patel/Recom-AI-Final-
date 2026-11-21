@@ -71,8 +71,6 @@ interface ClientDashboardProps {
 export default function ClientDashboard({ user, dark, setDark, onLogout }: ClientDashboardProps) {
   const [activeTab, setActiveTab] = useState<"dashboard" | "upload" | "reconciliation" | "reports" | "chat" | "settings">("dashboard");
   const [currentUser, setCurrentUser] = useState(user);
-  const [caDirectory, setCaDirectory] = useState<any[]>([]);
-  const [needsCaSelection, setNeedsCaSelection] = useState(false);
   const [clientId, setClientId] = useState<number | null>(null);
   const [gstDetails, setGstDetails] = useState<any | null>(null);
 
@@ -86,24 +84,7 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSuccessMsg, setProfileSuccessMsg] = useState("");
 
-  const [showCaChangeModal, setShowCaChangeModal] = useState(false);
   const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
-  const [myCaRequests, setMyCaRequests] = useState<any[]>([]);
-  const [selectedTargetCa, setSelectedTargetCa] = useState("");
-  const [selectedBarCaId, setSelectedBarCaId] = useState("");
-  const [changeReason, setChangeReason] = useState("");
-  const [submittingReq, setSubmittingReq] = useState(false);
-
-  const fetchCaRequests = async () => {
-    try {
-      const res = await apiRequest<{ requests: any[] }>("/api/ca-change-requests", { auth: true });
-      if (res?.requests) setMyCaRequests(res.requests);
-    } catch { }
-  };
-
-  useEffect(() => {
-    fetchCaRequests();
-  }, []);
 
   useEffect(() => {
     setCurrentUser(user);
@@ -177,9 +158,6 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
           }
         }
       })
-      .catch(() => { });
-    apiRequest<{ cas: any[] }>("/api/ca/list", { auth: true })
-      .then(res => setCaDirectory(res.cas || []))
       .catch(() => { });
   }, [user.name, user.email]);
 
@@ -374,6 +352,13 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
             time: formatIST(message.createdAt, ""),
           })));
         }
+
+        try {
+          const unreadRes = await apiRequest<{ totalUnread: number }>("/api/messages/unread-counts", { auth: true });
+          if (typeof unreadRes?.totalUnread === "number") {
+            setUnreadChatCount(unreadRes.totalUnread);
+          }
+        } catch { }
       }
     } catch { }
   };
@@ -549,8 +534,16 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
 
   // Chat State
   const [messages, setMessages] = useState<any[]>([]);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [chatInput, setChatInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (activeTab === "chat" && clientId) {
+      apiRequest(`/api/messages?clientId=${clientId}&markRead=true`, { auth: true }).catch(() => {});
+      setUnreadChatCount(0);
+    }
+  }, [activeTab, clientId]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -578,11 +571,6 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
   };
 
   const handleFileSelected = (file: File) => {
-    if (false && needsCaSelection) {
-      setUploadStatus("Please select your Tax Officer before uploading documents.");
-      return;
-    }
-
     const docTypeEnum = CATEGORY_TO_DOC_TYPE[uploadCategory] || "TAX_INVOICE";
     // Check if an existing upload in the same category exists for this client
     const existing = uploads.find(u => {
@@ -602,10 +590,6 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
   };
 
   const uploadDocument = async (file: File, overwriteUploadId?: string) => {
-    if (false && needsCaSelection) {
-      setUploadStatus("Please select your Tax Officer before uploading documents.");
-      return;
-    }
     const cat = uploadCategory;
     const catLabel = getCategoryLabel(cat);
     // GSTR-2B files go to the gstr parsing pipeline; everything else is books.
@@ -679,29 +663,6 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
       setIsUploading(false);
       setUploadProgress(0);
       setUploadStatus(err instanceof Error ? err.message : "Upload failed. Please try again.");
-    }
-  };
-
-  const selectCa = async (caId: string | number) => {
-    try {
-      const res = await apiRequest<{ profile: any }>("/api/client/select-ca", {
-        method: "POST",
-        auth: true,
-        body: JSON.stringify({ caId }),
-      });
-      setNeedsCaSelection(false);
-      if (res.profile?.ca) {
-        setCurrentUser(prev => ({
-          ...prev,
-          caName: res.profile.ca.name,
-          caEmail: res.profile.ca.email,
-          firmName: res.profile.ca.firmName,
-        }));
-      }
-      setClientNotice("Your Tax Officer has been selected.");
-      fetchClientData();
-    } catch (err) {
-      setClientNotice(err instanceof Error ? err.message : "Could not select Tax Officer.");
     }
   };
   const handleSaveProfile = async (e?: React.FormEvent) => {
@@ -796,22 +757,23 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                 <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-xs font-medium transition-colors ${active ? "bg-amber-500/10 text-amber-700 dark:text-amber-400" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
                   <Icon size={14} className={active ? "text-amber-500" : ""} />
                   <span>{tab.label}</span>
+                  {tab.id === "chat" && unreadChatCount > 0 && (
+                    <span className="ml-auto text-[10px] bg-red-500 text-white rounded-full min-w-4 h-4 px-1.5 flex items-center justify-center font-mono font-bold animate-pulse">
+                      {unreadChatCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </nav>
 
           <div className="p-3 border-t border-border bg-muted/20 text-left space-y-1.5">
-            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Your Tax Officer</div>
-            <div className="text-xs font-semibold text-foreground">{managingCA}</div>
-            <div className="text-[10px] text-muted-foreground font-mono">{firmName}</div>
-            <div className="text-[10px] text-muted-foreground font-mono">taxofficer.demo@reconai.local</div>
-            <button type="button" style={{ display: "none" }}>
-              Request Tax Officer Change
-            </button>
-            {false && myCaRequests.length > 0 && (
-              <div className="text-[10px] text-muted-foreground pt-0.5">Request: <span className="font-semibold text-primary">{myCaRequests[0].status}</span></div>
-            )}
+            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">GST Tax Support</div>
+            <div className="text-xs font-semibold text-foreground">ReconAI Tax Desk</div>
+            <div className="text-[10px] text-muted-foreground font-mono">{firmName || "Statutory GST Review & Filing Office"}</div>
+            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+              <ShieldCheck size={12} /> Connected & Active
+            </div>
           </div>
 
           <div className="p-2 border-t border-border">
@@ -841,44 +803,6 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
               fetchClientData();
             }}
           >
-            {false && needsCaSelection && (
-              <div className="mb-5 bg-card border border-amber-500/40 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
-                    <Building2 size={16} />
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold">Select Your Tax Officer</div>
-                    <div className="text-[11px] text-muted-foreground">Choose a tax officer to connect GST data & manage compliance</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={selectedBarCaId}
-                    onChange={e => setSelectedBarCaId(e.target.value)}
-                    className="bg-muted border border-border rounded-md px-3 py-1.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  >
-                    <option value="">Select Tax Officer Division...</option>
-                    {caDirectory.map(ca => (
-                      <option key={ca.id} value={ca.id}>
-                        {ca.name} {ca.firmName ? `(${ca.firmName})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (selectedBarCaId) selectCa(selectedBarCaId);
-                    }}
-                    disabled={!selectedBarCaId}
-                    className="bg-amber-500 text-slate-950 text-xs font-semibold px-3.5 py-1.5 rounded-md hover:bg-amber-400 disabled:opacity-50 transition-colors shadow-sm"
-                  >
-                    Confirm Selection
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Dashboard Tab */}
             {activeTab === "dashboard" && (() => {
               const totalInvoicesCount = myInvoices.length;
@@ -949,7 +873,7 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                       </h1>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {verifiedGstName ? `Business Entity: ${verifiedGstName} · ` : ""}
-                        GSTIN: <span className="font-mono font-semibold text-foreground">{clientGSTIN}</span> · Tax Officer: <span className="font-semibold text-foreground">{managingCA}</span>
+                        GSTIN: <span className="font-mono font-semibold text-foreground">{clientGSTIN}</span> · Status: <span className="font-semibold text-emerald-600 dark:text-emerald-400">Assigned & Active</span>
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1752,7 +1676,7 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                 {(() => {
                   const meta = CATEGORY_META[uploadCategory];
                   const isGstr = uploadCategory === "gstr_2b";
-                  const canUpload = !needsCaSelection;
+                  const canUpload = true;
                   const DROPZONE_ACCENT: Record<string, string> = {
                     purchase_register: "border-emerald-500/40 hover:border-emerald-500",
                     gstr_2b: "border-blue-500/40 hover:border-blue-500",
@@ -2374,18 +2298,18 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                 {/* Chat Header */}
                 <div className="px-5 py-3 border-b border-border flex items-center justify-between bg-muted/20">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-amber-500/10 text-amber-600 flex items-center justify-center">
-                      <User size={15} />
+                    <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                      <ShieldCheck size={16} />
                     </div>
                     <div>
-                      <h3 className="text-xs font-bold text-foreground">{managingCA}</h3>
-                      <div className="text-[10px] text-emerald-600 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full" /> Advisor not connected
+                      <h3 className="text-xs font-bold text-foreground">ReconAI Tax Support Desk</h3>
+                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-medium">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full" /> Tax Officer Connected & Active
                       </div>
                     </div>
                   </div>
                   <div className="text-xs text-muted-foreground font-mono bg-card px-2.5 py-0.5 rounded border border-border">
-                    Office ID: Not configured
+                    {firmName || "Statutory GST Office"}
                   </div>
                 </div>
 
@@ -2567,21 +2491,22 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                   </div>
                 </form>
 
-                {/* 2. Assigned Tax Officer */}
+                {/* 2. Tax Office & Compliance Desk */}
                 <div className="border-t border-border pt-4 space-y-2">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Assigned Tax Officer</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">GST Compliance & Tax Desk</div>
                   <div className="flex items-center justify-between p-3 bg-muted/30 border border-border rounded-lg">
-                    <div>
-                      <div className="text-xs font-semibold">{managingCA}</div>
-                      <div className="text-[10px] text-muted-foreground font-mono">{firmName}</div>
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                        <ShieldCheck size={16} />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-foreground">ReconAI Tax Desk</div>
+                        <div className="text-[10px] text-muted-foreground font-mono">{firmName || "Statutory GST Review & Filing Office"}</div>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowCaChangeModal(true)}
-                      className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline"
-                    >
-                      Change Officer
-                    </button>
+                    <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full">
+                      Active Desk
+                    </span>
                   </div>
                 </div>
 
@@ -2615,84 +2540,6 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
 
         </main>
       </div>
-
-      {/* Tax Officer Change Request Modal */}
-      {showCaChangeModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-card border border-border text-card-foreground rounded-xl p-6 w-full max-w-md space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold flex items-center gap-2">
-                <Building2 size={18} className="text-amber-500" /> Request Tax Officer Change
-              </h3>
-              <button onClick={() => setShowCaChangeModal(false)} className="p-1 hover:bg-muted rounded"><X size={15} /></button>
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              Select a new Tax Officer. System Admin will review and allow the transfer of your client records.
-            </p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium block mb-1">Target Tax Officer</label>
-                <select
-                  value={selectedTargetCa}
-                  onChange={e => setSelectedTargetCa(e.target.value)}
-                  className="w-full text-xs px-3 py-2 bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-amber-500"
-                >
-                  <option value="">Select a Tax Officer...</option>
-                  {caDirectory.map(ca => (
-                    <option key={ca.id} value={ca.id}>
-                      {ca.name} {ca.firmName ? `(${ca.firmName})` : ""} — {ca.email}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium block mb-1">Reason for Transfer (Optional)</label>
-                <textarea
-                  value={changeReason}
-                  onChange={e => setChangeReason(e.target.value)}
-                  placeholder="State reason for changing Tax Officer..."
-                  rows={3}
-                  className="w-full text-xs px-3 py-2 bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-amber-500 resize-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setShowCaChangeModal(false)} className="text-xs border border-border px-3 py-1.5 rounded hover:bg-muted">Cancel</button>
-              <button
-                onClick={async () => {
-                  if (!selectedTargetCa) {
-                    setClientNotice("Please select a target Tax Officer.");
-                    return;
-                  }
-                  setSubmittingReq(true);
-                  try {
-                    await apiRequest("/api/ca-change-requests", {
-                      method: "POST",
-                      auth: true,
-                      body: JSON.stringify({ requestedCaId: selectedTargetCa, reason: changeReason })
-                    });
-                    setClientNotice("Tax Officer Change Request submitted to System Admin for approval.");
-                    setShowCaChangeModal(false);
-                    fetchCaRequests();
-                  } catch (err) {
-                    setClientNotice(err instanceof Error ? err.message : "Request failed.");
-                  } finally {
-                    setSubmittingReq(false);
-                  }
-                }}
-                disabled={submittingReq}
-                className="text-xs bg-amber-500 text-slate-950 font-semibold px-4 py-1.5 rounded hover:bg-amber-400 disabled:opacity-50"
-              >
-                {submittingReq ? "Submitting..." : "Submit Request to Admin"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Client Document Re-upload Action Modal */}
       {activeReuploadItem && (

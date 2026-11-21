@@ -9,7 +9,7 @@ import {
   Building2, CreditCard, ChevronDown, X, Send, Bot, Paperclip,
   FileUp, Check, Clock, CircleDot, Layers, Network, AlertCircle,
   Star, Shield, Cpu, HardDrive, Wifi, ChevronLeft, ChevronUp, Info, Loader2, Trash2, UserCheck,
-  ShoppingCart, Receipt, Calendar, ArrowRight, FileSpreadsheet, CheckSquare, Sparkles
+  ShoppingCart, Receipt, Calendar, ArrowRight, ArrowLeft, FileSpreadsheet, CheckSquare, Sparkles
 } from "lucide-react";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -30,6 +30,7 @@ import AdminPanelContent from "./components/AdminPage";
 import ClientDocumentsPage from "./components/ClientDocumentsPage";
 import TaxOfficerChatHistory from "./components/TaxOfficerChatHistory";
 import NotificationsCenter from "./components/NotificationsCenter";
+import ClientMessagesPage from "./components/ClientMessagesPage";
 
 import logoImg from "../assets/Screenshot_2026-07-01_214942-removebg-preview.png";
 import darkLogoImg from "../assets/darkThemeLogo.png";
@@ -37,7 +38,7 @@ import darkLogoImg from "../assets/darkThemeLogo.png";
 // ── Types ──────────────────────────────────────────────────────────────────
 type Page =
   | "dashboard" | "clients" | "reconciliation" | "documents" | "upload"
-  | "fraud" | "graph" | "assistant" | "reports" | "notifications"
+  | "messages" | "fraud" | "graph" | "assistant" | "reports" | "notifications"
   | "settings" | "admin";
 
 interface LoggedInUser {
@@ -312,20 +313,61 @@ const navItems = [
   { id: "reconciliation", label: "Reconciliation", icon: FileText },
   { id: "fraud", label: "Fraud & Cases", icon: ShieldAlert },
   { id: "documents", label: "Client Documents", icon: Layers },
+  { id: "messages", label: "Client Messages", icon: MessageSquare },
   { id: "graph", label: "Graph Analytics", icon: Share2 },
-  { id: "assistant", label: "AI Assistant", icon: MessageSquare },
+  { id: "assistant", label: "AI Assistant", icon: Bot },
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "admin", label: "Admin Panel", icon: Lock },
-
 ];
 
-function Sidebar({ page, setPage, collapsed, user, onLogout, dark }: { page: Page; setPage: (p: Page) => void; collapsed: boolean; user: LoggedInUser; onLogout: () => void; dark: boolean }) {
-  const visibleItems = navItems.filter(({ id }) => {
-    if (id === "admin" && user.role !== "admin") return false;
-    return true;
-  });
+function Sidebar({
+  page,
+  setPage,
+  collapsed,
+  user,
+  onLogout,
+  dark,
+  inspectingClient,
+  onExitInspection,
+  unreadMessageCount,
+}: {
+  page: Page;
+  setPage: (p: Page) => void;
+  collapsed: boolean;
+  user: LoggedInUser;
+  onLogout: () => void;
+  dark: boolean;
+  inspectingClient?: { id: string; name: string; gstin: string } | null;
+  onExitInspection?: () => void;
+  unreadMessageCount?: number;
+}) {
+  const visibleItems = useMemo(() => {
+    if (user.role === "admin") {
+      if (inspectingClient) {
+        // Admin in Audit Mode: inspect operational client tools
+        const auditPages: Page[] = ["admin", "reconciliation", "fraud", "documents", "messages", "graph", "reports", "settings"];
+        return navItems
+          .filter(item => auditPages.includes(item.id as Page))
+          .map(item => item.id === "admin" ? { ...item, label: "Exit to Admin" } : item);
+      }
+      // Standard Admin Governance view: clean and uncluttered
+      const adminStandardPages: Page[] = ["admin", "dashboard", "clients", "notifications", "settings"];
+      return navItems.filter(item => adminStandardPages.includes(item.id as Page));
+    }
+
+    // Tax Officer (CA): standard operational items (no admin panel)
+    return navItems.filter(item => item.id !== "admin");
+  }, [user.role, inspectingClient]);
+
+  const handleNavClick = (id: Page) => {
+    if (id === "admin" && inspectingClient && onExitInspection) {
+      onExitInspection();
+    } else {
+      setPage(id);
+    }
+  };
 
   return (
     <aside className={`fixed top-0 left-0 h-screen bg-sidebar border-r border-sidebar-border flex flex-col z-30 transition-all duration-200 ${collapsed ? "w-14" : "w-56"}`}>
@@ -347,20 +389,70 @@ function Sidebar({ page, setPage, collapsed, user, onLogout, dark }: { page: Pag
           />
         </div>
       </div>
+
+      {inspectingClient && (
+        <div className={`mx-2 mt-2.5 p-2 rounded-lg bg-primary/10 border border-primary/20 ${collapsed ? "text-center" : ""}`}>
+          {!collapsed ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-primary flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Inspection Mode
+                </span>
+                <span className="text-[9px] font-mono text-muted-foreground bg-muted px-1 rounded">Active</span>
+              </div>
+              <div className="font-semibold text-xs text-foreground truncate" title={inspectingClient.name}>
+                {inspectingClient.name}
+              </div>
+              <button
+                type="button"
+                onClick={onExitInspection}
+                className="w-full flex items-center justify-center gap-1 py-1 px-2 text-[11px] font-semibold bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors shadow-sm"
+              >
+                <ArrowLeft size={11} />
+                <span>Exit Inspection</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onExitInspection}
+              title={`Workspace Inspection: ${inspectingClient.name}. Click to Exit.`}
+              className="w-full flex items-center justify-center py-1 text-primary hover:text-primary/80"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            </button>
+          )}
+        </div>
+      )}
+
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5 scrollbar-thin">
         {visibleItems.map(({ id, label, icon: Icon }) => {
           const active = page === id;
           return (
             <button
               key={id}
-              onClick={() => setPage(id as Page)}
+              onClick={() => handleNavClick(id as Page)}
               className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors duration-100 ${active
                 ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
                 : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
                 }`}
             >
-              <Icon size={15} className={active ? "text-sidebar-primary" : ""} />
+              <div className="relative flex items-center justify-center shrink-0">
+                <Icon size={15} className={active ? "text-sidebar-primary" : ""} />
+                {collapsed && id === "messages" && (unreadMessageCount ?? 0) > 0 && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
+                )}
+                {collapsed && id === "notifications" && notifications.some(n => !n.read) && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
+                )}
+              </div>
               {!collapsed && <span className="truncate">{label}</span>}
+              {!collapsed && id === "messages" && (unreadMessageCount ?? 0) > 0 && (
+                <span className="ml-auto text-[10px] bg-red-500 text-white rounded-full min-w-4 h-4 px-1.5 flex items-center justify-center font-mono font-bold animate-pulse">
+                  {unreadMessageCount}
+                </span>
+              )}
               {!collapsed && id === "notifications" && notifications.some(n => !n.read) && (
                 <span className="ml-auto text-[10px] bg-red-500 text-white rounded-full min-w-4 h-4 px-1 flex items-center justify-center font-mono">
                   {notifications.filter(n => !n.read).length}
@@ -408,6 +500,7 @@ function Topbar({
     reconciliation: "Invoice Reconciliation & Rule Engine",
     documents: "Client Documents (Read-Only)",
     upload: "Client Documents (Read-Only)",
+    messages: "Client Messages & Communications",
     fraud: "Fraud Detection & Case Queue",
     graph: "Graph Analytics",
     assistant: "AI Assistant",
@@ -834,7 +927,15 @@ function DashboardPage({
 }
 
 // ── Clients ────────────────────────────────────────────────────────────────
-function ClientsPage({ onUpdate, user }: { onUpdate?: () => void; user?: LoggedInUser }) {
+function ClientsPage({
+  onUpdate,
+  user,
+  onInspectClient,
+}: {
+  onUpdate?: () => void;
+  user?: LoggedInUser;
+  onInspectClient?: (client: { id: string; name: string; gstin: string }) => void;
+}) {
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -1170,7 +1271,24 @@ function ClientsPage({ onUpdate, user }: { onUpdate?: () => void; user?: LoggedI
               </div>
             </div>
 
-            <div className="flex justify-end pt-1">
+            <div className="flex justify-end items-center gap-2 pt-1">
+              {user?.role === "admin" && onInspectClient && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onInspectClient({
+                      id: String(selectedClientDetails.id),
+                      name: selectedClientDetails.name,
+                      gstin: selectedClientDetails.gstin,
+                    });
+                    setSelectedClientDetails(null);
+                  }}
+                  className="text-xs bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 font-semibold px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5"
+                >
+                  <span>Inspect Workspace</span>
+                  <ArrowRight size={12} />
+                </button>
+              )}
               <button onClick={() => setSelectedClientDetails(null)} className="text-xs bg-primary text-primary-foreground font-semibold px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors">
                 Close Details
               </button>
@@ -4865,8 +4983,16 @@ function SettingsPage({ dark, setDark, user }: { dark: boolean; setDark: (v: boo
 }
 
 // ── Admin Panel ────────────────────────────────────────────────────────────
-function AdminPage({ onSelectClient, onNavigate }: { onSelectClient?: (id: string) => void; onNavigate?: (p: any) => void }) {
-  return <AdminPanelContent onSelectClient={onSelectClient} onNavigate={onNavigate} />;
+function AdminPage({
+  onSelectClient,
+  onInspectClient,
+  onNavigate,
+}: {
+  onSelectClient?: (id: string) => void;
+  onInspectClient?: (client: { id: string; name: string; gstin: string }) => void;
+  onNavigate?: (p: any) => void;
+}) {
+  return <AdminPanelContent onSelectClient={onSelectClient} onInspectClient={onInspectClient} onNavigate={onNavigate} />;
 }
 
 function _OldAdminPage() {
@@ -5574,8 +5700,41 @@ export default function App() {
   const [verifyingDocId, setVerifyingDocId] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string>("ALL");
   const [reconciledPeriod, setReconciledPeriod] = useState<string>("");
+  const [inspectingClient, setInspectingClient] = useState<{ id: string; name: string; gstin: string } | null>(null);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [, setDataVersion] = useState(0);
   const forceUpdate = () => setDataVersion(v => v + 1);
+
+  const fetchUnreadMessageCount = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await apiRequest<{ totalUnread: number }>("/api/messages/unread-counts", { auth: true });
+      if (typeof res?.totalUnread === "number") {
+        setUnreadMessageCount(res.totalUnread);
+      }
+    } catch { }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    fetchUnreadMessageCount();
+    const interval = setInterval(fetchUnreadMessageCount, 12000);
+    return () => clearInterval(interval);
+  }, [user, fetchUnreadMessageCount]);
+
+  const handleInspectClient = useCallback((client: { id: string; name: string; gstin: string }) => {
+    setInspectingClient(client);
+    setSelectedClientId(String(client.id));
+    fetchAllData(forceUpdate, String(client.id));
+    setPage("reconciliation");
+  }, []);
+
+  const handleExitInspection = useCallback(() => {
+    setInspectingClient(null);
+    setSelectedClientId("ALL");
+    fetchAllData(forceUpdate, "ALL");
+    setPage("admin");
+  }, []);
 
   useEffect(() => {
     const savedUser = localStorage.getItem("reconai_user");
@@ -5633,6 +5792,7 @@ export default function App() {
     localStorage.removeItem("reconai_token");
     localStorage.removeItem("reconai_user");
     setUser(null);
+    setInspectingClient(null);
     setAuthMode("landing");
   };
 
@@ -5699,7 +5859,13 @@ export default function App() {
         onRefresh={() => fetchAllData(forceUpdate, selectedClientId)}
       />
     ),
-    clients: <ClientsPage onUpdate={forceUpdate} user={user!} />,
+    clients: (
+      <ClientsPage
+        onUpdate={forceUpdate}
+        user={user!}
+        onInspectClient={user?.role === "admin" ? handleInspectClient : undefined}
+      />
+    ),
     reconciliation: (
       <ReconciliationPage
         onRefresh={() => fetchAllData(forceUpdate)}
@@ -5711,6 +5877,13 @@ export default function App() {
     ),
     documents: <ClientDocumentsPage onVerifyDoc={setVerifyingDocId} selectedClientId={selectedClientId} />,
     upload: <ClientDocumentsPage onVerifyDoc={setVerifyingDocId} isRedirect={true} selectedClientId={selectedClientId} />,
+    messages: (
+      <ClientMessagesPage
+        user={user!}
+        initialClientId={selectedClientId !== "ALL" ? selectedClientId : undefined}
+        onRefreshUnreadCounts={fetchUnreadMessageCount}
+      />
+    ),
     fraud: (
       <FraudPage
         onVerifyDoc={setVerifyingDocId}
@@ -5723,7 +5896,16 @@ export default function App() {
     reports: <ReportsPage />,
     notifications: <NotificationsPage user={user!} />,
     settings: <SettingsPage dark={dark} setDark={setDark} user={user!} />,
-    admin: <AdminPage onSelectClient={(id: string) => { setSelectedClientId(id); fetchAllData(forceUpdate, id); }} onNavigate={setPage} />,
+    admin: (
+      <AdminPage
+        onSelectClient={(id: string) => {
+          setSelectedClientId(id);
+          fetchAllData(forceUpdate, id);
+        }}
+        onInspectClient={handleInspectClient}
+        onNavigate={setPage}
+      />
+    ),
 
   };
 
@@ -5731,8 +5913,44 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
-      <Sidebar page={page} setPage={setPage} collapsed={sidebarCollapsed} user={user!} onLogout={handleLogout} dark={dark} />
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        collapsed={sidebarCollapsed}
+        user={user!}
+        onLogout={handleLogout}
+        dark={dark}
+        inspectingClient={inspectingClient}
+        onExitInspection={handleExitInspection}
+        unreadMessageCount={unreadMessageCount}
+      />
       <div style={{ marginLeft: sidebarWidth }} className="transition-all duration-200 flex flex-col min-h-screen">
+        {user?.role === "admin" && inspectingClient && (
+          <div className="bg-primary/10 border-b border-primary/20 px-4 py-2 flex items-center justify-between gap-3 text-xs shrink-0 sticky top-0 z-30 backdrop-blur-md">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="font-bold text-primary uppercase tracking-wider text-[11px] shrink-0">Client Workspace Inspection</span>
+              <span className="text-muted-foreground/60 hidden sm:inline">|</span>
+              <span className="text-foreground truncate font-medium">
+                Inspecting: <strong className="font-bold">{inspectingClient.name}</strong>
+              </span>
+              <span className="font-mono text-muted-foreground bg-muted border border-border px-1.5 py-0.5 rounded text-[10px] shrink-0 hidden md:inline">
+                GSTIN: {inspectingClient.gstin}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-[11px] text-muted-foreground hidden lg:inline">Tax Officer audit tools scoped to this client (Read-Only)</span>
+              <button
+                type="button"
+                onClick={handleExitInspection}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
+              >
+                <ArrowLeft size={13} />
+                <span>Exit Inspection</span>
+              </button>
+            </div>
+          </div>
+        )}
         <Topbar
           dark={dark}
           setDark={setDark}
@@ -5744,6 +5962,16 @@ export default function App() {
           selectedClientId={selectedClientId}
           onClientFilterChange={(id: string) => {
             setSelectedClientId(id);
+            if (user?.role === "admin") {
+              if (id === "ALL") {
+                setInspectingClient(null);
+              } else {
+                const found = clients.find(c => String(c.id) === id);
+                if (found) {
+                  setInspectingClient({ id: String(found.id), name: found.name, gstin: found.gstin });
+                }
+              }
+            }
             fetchAllData(forceUpdate, id);
           }}
         />

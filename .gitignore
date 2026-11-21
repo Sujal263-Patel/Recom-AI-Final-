@@ -20,3 +20,19 @@ server/server/
 
 # Debug output written by reference_data/extract.py (contains extracted invoice data)
 reference_data/raw_response.txt
+
+# Tests and caches
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE configurations
+.vscode/
+.idea/
+
